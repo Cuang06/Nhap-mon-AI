@@ -1,5 +1,6 @@
 # Nhap-mon-AI
 Chương trình yêu cầu các thư viện:
+
   pip install osmnx flask flask-cors pandas openpyxl
   
 Cách chạy chương trình:
