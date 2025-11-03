@@ -1,9 +1,9 @@
 # Tên file: app.py
-# (Phiên bản cập nhật - Tìm đường giữa các ngã giao ngẫu nhiên)
+# (Phiên bản cập nhật - Thêm API lấy tất cả node)
 
 import osmnx as ox
 import math
-import random # Thêm thư viện random
+import random 
 from heapq import heappush, heappop
 from flask import Flask, jsonify
 from flask_cors import CORS
@@ -16,10 +16,7 @@ G = ox.load_graphml("phuong_tuong_mai.graphml")
 
 # === LỌC RA CÁC NGÃ GIAO ===
 print("Đang lọc ra các ngã giao (junctions)...")
-# Lấy "degree" (số cạnh kết nối) của mỗi nút
 degrees = G.degree()
-# Ngã giao là nút có 1 cạnh (ngõ cụt) hoặc 3+ cạnh (ngã ba, ngã tư...)
-# Chúng ta loại bỏ các nút có 2 cạnh (chỉ là điểm uốn trên đường)
 junctions = [node for node, degree in degrees if degree != 2]
 print(f"Đã tìm thấy {len(junctions)} ngã giao. Server đã sẵn sàng!")
 
@@ -28,7 +25,7 @@ print(f"Đã tìm thấy {len(junctions)} ngã giao. Server đã sẵn sàng!")
 app = Flask(__name__)
 CORS(app) # Cho phép web front-end của bạn gọi API này
 
-# === SAO CHÉP HÀM A* VÀ HAVERSINE CỦA BẠN VÀO ĐÂY ===
+# === HÀM A* VÀ HAVERSINE ===
 def haversine(node1, node2):
     lat1, lon1 = G.nodes[node1]["y"], G.nodes[node1]["x"]
     lat2, lon2 = G.nodes[node2]["y"], G.nodes[node2]["x"]
@@ -68,30 +65,22 @@ def a_star(graph, start, goal):
                 heappush(open_set, (f_score[neighbor], neighbor))
     return None # Không tìm thấy đường
 
-# === TẠO ĐƯỜNG LINK API MỚI ===
-# API này dùng phương thức GET (vì không cần gửi dữ liệu lên)
+# === API TÌM ĐƯỜNG NGẪU NHIÊN ===
 @app.route('/api/random-junction-path', methods=['GET'])
 def find_random_path_api():
     try:
-        # 1. Chọn 2 ngã giao ngẫu nhiên từ danh sách đã lọc
         start_node = random.choice(junctions)
         end_node = random.choice(junctions)
-
-        # Đảm bảo 2 điểm không trùng nhau
         while start_node == end_node:
             end_node = random.choice(junctions)
 
-        # 2. Chạy thuật toán A* của bạn
         path_nodes = a_star(G, start_node, end_node)
 
         if path_nodes:
-            # 3. Chuyển đổi NÚT (node) thành TỌA ĐỘ (lat, lon)
             path_coords = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in path_nodes]
-            # Lấy tọa độ của điểm đầu và cuối để vẽ marker
             start_coord = (G.nodes[start_node]["y"], G.nodes[start_node]["x"])
             end_coord = (G.nodes[end_node]["y"], G.nodes[end_node]["x"])
             
-            # 4. Trả về kết quả (JSON) cho front-end
             return jsonify({
                 "status": "success",
                 "path": path_coords,
@@ -103,6 +92,22 @@ def find_random_path_api():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+# ===  API LẤY TẤT CẢ CÁC NODE ===
+@app.route('/api/all-nodes', methods=['GET'])
+def get_all_nodes():
+    try:
+        # Lấy tọa độ [lat, lon] của TẤT CẢ các node
+        # G.nodes(data=True) trả về (node_id, data_dict)
+        all_nodes_coords = [(data["y"], data["x"]) for _, data in G.nodes(data=True)]
+        
+        return jsonify({
+            "status": "success",
+            "nodes": all_nodes_coords
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 # === CHẠY SERVER ===
 if __name__ == '__main__':
