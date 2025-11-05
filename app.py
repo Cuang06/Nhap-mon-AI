@@ -1,6 +1,3 @@
-# Tên file: app.py
-# (Phiên bản cập nhật - Thêm API lấy tất cả node)
-
 import osmnx as ox
 import math
 import random 
@@ -8,24 +5,14 @@ from heapq import heappush, heappop
 from flask import Flask, jsonify
 from flask_cors import CORS
 
-print("Bắt đầu khởi động server...")
-
-# === TẢI BẢN ĐỒ ===
-print("Đang tải file bản đồ phuong_tuong_mai.graphml...")
 G = ox.load_graphml("phuong_tuong_mai.graphml")
-
-# === LỌC RA CÁC NGÃ GIAO ===
-print("Đang lọc ra các ngã giao (junctions)...")
 degrees = G.degree()
 junctions = [node for node, degree in degrees if degree != 2]
 print(f"Đã tìm thấy {len(junctions)} ngã giao. Server đã sẵn sàng!")
 
-
-# === KHỞI TẠO FLASK (Web Server) ===
 app = Flask(__name__)
-CORS(app) # Cho phép web front-end của bạn gọi API này
+CORS(app) 
 
-# === HÀM A* VÀ HAVERSINE ===
 def haversine(node1, node2):
     lat1, lon1 = G.nodes[node1]["y"], G.nodes[node1]["x"]
     lat2, lon2 = G.nodes[node2]["y"], G.nodes[node2]["x"]
@@ -52,7 +39,7 @@ def a_star(graph, start, goal):
             while current in came_from:
                 current = came_from[current]
                 path.append(current)
-            return path[::-1] # Trả về đường đi
+            return path[::-1] 
 
         for neighbor in graph.neighbors(current):
             edge_data = graph[current][neighbor][0]
@@ -63,9 +50,8 @@ def a_star(graph, start, goal):
                 g_score[neighbor] = tentative_g
                 f_score[neighbor] = tentative_g + haversine(neighbor, goal)
                 heappush(open_set, (f_score[neighbor], neighbor))
-    return None # Không tìm thấy đường
+    return None 
 
-# === API TÌM ĐƯỜNG NGẪU NHIÊN ===
 @app.route('/api/random-junction-path', methods=['GET'])
 def find_random_path_api():
     try:
@@ -93,12 +79,9 @@ def find_random_path_api():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# ===  API LẤY TẤT CẢ CÁC NODE ===
 @app.route('/api/all-nodes', methods=['GET'])
 def get_all_nodes():
     try:
-        # Lấy tọa độ [lat, lon] của TẤT CẢ các node
-        # G.nodes(data=True) trả về (node_id, data_dict)
         all_nodes_coords = [(data["y"], data["x"]) for _, data in G.nodes(data=True)]
         
         return jsonify({
@@ -108,7 +91,6 @@ def get_all_nodes():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
-# === CHẠY SERVER ===
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
