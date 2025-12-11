@@ -35,7 +35,47 @@ TRAFFIC_LEVELS = {
     "medium": 1.5,  # Tắc vừa
     "heavy": 2.0    # Tắc nặng
 }
+# --- [MỚI] CẤU HÌNH XE & LOGIC Ô TÔ ---
+SPEEDS = {
+    "walk": 5 / 3.6,        # m/s
+    "motorbike": 25 / 3.6,  # m/s
+    "car": 35 / 3.6         # m/s
+}
+NON_CAR_HIGHWAYS = {'footway', 'path', 'pedestrian', 'steps', 'cycleway', 'living_street', 'construction'}
 
+def is_car_allowed(edge_data):
+
+    hw = edge_data.get('highway', '')
+    if isinstance(hw, list): hw = hw[0]
+    
+    # Chỉ trả về True nếu highway là 'primary'
+    return hw == 'primary'
+def calculate_path_time(G_graph, path, speed_ms):
+    if not path: return 0, 0
+    total_len = 0
+    total_weighted_len = 0 # Độ dài quy đổi ra thời gian (tính cả tắc)
+    
+    for i in range(len(path) - 1):
+        u, v = path[i], path[i+1]
+        if G_graph.has_edge(u, v):
+            edge_data = min(G_graph.get_edge_data(u, v).values(), key=lambda x: x.get('length', 0))
+            
+            length = float(edge_data.get('length', 0))
+            factor = float(edge_data.get('traffic_factor', 1.0)) # Lấy hệ số tắc
+            
+            total_len += length
+            total_weighted_len += length * factor # Quãng đường "ảo" dài hơn do tắc
+
+    # Thời gian = Quãng đường (đã nhân hệ số tắc) / Vận tốc
+    return total_len, (total_weighted_len / speed_ms) / 60
+
+# Tạo sẵn bản đồ riêng cho ô tô (lọc đường ngay khi khởi động server)
+print("-> Đang tạo lớp bản đồ cho ô tô...")
+G_car = G.copy()
+remove_edges = [(u, v, k) for u, v, k, d in G_car.edges(keys=True, data=True) if not is_car_allowed(d)]
+G_car.remove_edges_from(remove_edges)
+G_car.remove_nodes_from(list(nx.isolates(G_car)))
+# ---------------------------------------
 def haversine_calc(lat1, lon1, lat2, lon2):
     R = 6371000 
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -271,37 +311,102 @@ def mark_traffic_on_path(path_nodes, level):
 # ==========================================
 
 @app.route('/api/find-path', methods=['POST'])
-def find_path():
+def find_path_api():
     data = request.json
-    start, end = data.get('start'), data.get('end')
+    start = data.get('start') # {lat, lng}
+    end = data.get('end')     # {lat, lng}
+    vehicle = data.get('vehicle', 'motorbike') # mặc định là xe máy nếu ko chọn
+
+    if not start or not end:
+        return jsonify({"status": "error", "message": "Thiếu điểm đầu/cuối"}), 400
+
     try:
-        u1, v1, k1, _ = find_nearest_edge(start['lat'], start['lng'])
-        u2, v2, k2, _ = find_nearest_edge(end['lat'], end['lng'])
-        if u1 is None or u2 is None:
-            return jsonify({"status": "error", "message": "Không tìm thấy đường gần đó"}), 404
+        # Tìm node gần nhất trên bản đồ gốc
+        start_node = ox.distance.nearest_nodes(G, start['lng'], start['lat'])
+        end_node = ox.distance.nearest_nodes(G, end['lng'], end['lat'])
+        
+        full_path_coords = [] # Chỉ dùng cho trường hợp không phải ô tô
+        total_dist = 0
+        total_time = 0
+        details = []
 
-        G_temp = G.copy()
-        
-        # ... (Giữ nguyên phần xử lý geometry/project point cũ) ...
-        geom_start = parse_linestring(G[u1][v1][k1].get('geometry', '')) if k1 in G[u1][v1] else [(G.nodes[u1]['y'], G.nodes[u1]['x']), (G.nodes[v1]['y'], G.nodes[v1]['x'])]
-        geom_end = parse_linestring(G[u2][v2][k2].get('geometry', '')) if k2 in G[u2][v2] else [(G.nodes[u2]['y'], G.nodes[u2]['x']), (G.nodes[v2]['y'], G.nodes[v2]['x'])]
-        proj_start = project_point_to_edge((start['lat'], start['lng']), geom_start) or (start['lat'], start['lng'])
-        proj_end = project_point_to_edge((end['lat'], end['lng']), geom_end) or (end['lat'], end['lng'])
-        temp_start_id = add_temp_node(G_temp, proj_start[0], proj_start[1], (u1, v1, k1))
-        temp_end_id = add_temp_node(G_temp, proj_end[0], proj_end[1], (u2, v2, k2))
-        # ... (Kết thúc phần giữ nguyên) ...
+        if vehicle == 'car':
+            # --- LOGIC ĐẶC BIỆT CHO Ô TÔ (Đi bộ -> Lái xe -> Đi bộ) ---
+            try:
+                car_start = ox.distance.nearest_nodes(G_car, start['lng'], start['lat'])
+                car_end = ox.distance.nearest_nodes(G_car, end['lng'], end['lat'])
+            except:
+                return jsonify({"status": "error", "message": "Không tìm thấy đường ô tô gần đó"}), 404
 
-        path_nodes = a_star(G_temp, temp_start_id, temp_end_id)
-        
-        if path_nodes:
-            path_coords = [(G_temp.nodes[n]["y"], G_temp.nodes[n]["x"]) for n in path_nodes if G_temp.has_node(n)]
-            return jsonify({"status": "success", "path": path_coords})
-        
-        # Thông báo lỗi rõ ràng khi bị chặn
-        return jsonify({"status": "error", "message": "Đường bị chặn do NGẬP LỤT hoặc CẤM! Hãy chờ nước rút."}), 404
-        
+            # 1. Đi bộ ra chỗ đậu xe
+            path1 = []
+            if start_node != car_start:
+                try: path1 = nx.shortest_path(G, start_node, car_start, weight='length')
+                except: pass
+            
+            # 2. Lái xe
+            path2 = []
+            try: path2 = nx.shortest_path(G_car, car_start, car_end, weight='length')
+            except nx.NetworkXNoPath: return jsonify({"status": "error", "message": "Ô tô không đi được giữa 2 điểm này"}), 404
+
+            # 3. Đi bộ vào đích
+            path3 = []
+            if car_end != end_node:
+                try: path3 = nx.shortest_path(G, car_end, end_node, weight='length')
+                except: pass
+
+            # Tính toán
+            d1, t1 = calculate_path_time(G, path1, SPEEDS['walk'])
+            d2, t2 = calculate_path_time(G_car, path2, SPEEDS['car'])
+            d3, t3 = calculate_path_time(G, path3, SPEEDS['walk'])
+            
+            total_dist = d1 + d2 + d3
+            total_time = t1 + t2 + t3
+            details = [f"Đi bộ: {d1:.0f}m ({t1:.1f}p)", f"Ô tô: {d2:.0f}m ({t2:.1f}p)", f"Đi bộ: {d3:.0f}m ({t3:.1f}p)"]
+            
+            # [CẬP NHẬT] CHIA PATH THÀNH 3 ĐOẠN ĐỘC LẬP (ĐỂ VẼ NÉT ĐỨT Ở FRONTEND)
+            path1_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path1]
+            path2_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path2]
+            path3_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path3]
+            
+            # Ghép path lại cho kết quả "path" chính (để đảm bảo tính liên tục cho trường hợp fallback)
+            full_path_coords = path1_coords + path2_coords[1:]
+            if path3_coords: full_path_coords += path3_coords[1:]
+
+            return jsonify({
+                "status": "success",
+                "path": full_path_coords, # Dùng cho trường hợp chung
+                "path1_walk": path1_coords,
+                "path2_drive": path2_coords,
+                "path3_walk": path3_coords,
+                "distance": round(total_dist, 2),
+                "time": round(total_time, 1),
+                "details": details
+            })
+            
+        else:
+            # --- LOGIC XE MÁY / ĐI BỘ ---
+            try:
+                full_path_nodes = a_star(G, start_node, end_node) # Dùng hàm a_star của bạn
+                if full_path_nodes is None:
+                    return jsonify({"status": "error", "message": "Không tìm thấy đường đi (có thể do ngập hoặc cấm)"}), 404
+                total_dist, total_time = calculate_path_time(G, full_path_nodes, SPEEDS[vehicle])
+            except nx.NetworkXNoPath:
+                return jsonify({"status": "error", "message": "Không tìm thấy đường đi"}), 404
+
+            # Chuyển đổi list node ID sang tọa độ [lat, lng] để vẽ
+            full_path_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in full_path_nodes]
+
+        return jsonify({
+            "status": "success",
+            "path": full_path_coords,
+            "distance": round(total_dist, 2),
+            "time": round(total_time, 1),
+            "details": details
+        })
+
     except Exception as e:
-        print(e)
+        print(f"Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 @app.route('/api/all-nodes', methods=['GET'])
 def get_all_nodes():
@@ -339,7 +444,14 @@ def add_traffic_segment():
 
         # Gán hệ số tắc đường lên graph gốc
         mark_traffic_on_path(path_nodes, level)
-
+        # Cập nhật lại trọng số cho G_car nếu cạnh đó tồn tại
+        for u, v in zip(path_nodes[:-1], path_nodes[1:]):
+            if G_car.has_edge(u, v):
+                # Lấy data từ G chép sang G_car
+                # (Lưu ý: đây là giải pháp đơn giản hóa)
+                for k in G[u][v]:
+                    if k in G_car[u][v]:
+                        G_car[u][v][k]['traffic_factor'] = G[u][v][k].get('traffic_factor', 1.0)
         path_coords = build_path_coords(G, path_nodes)
 
         color_map = {
