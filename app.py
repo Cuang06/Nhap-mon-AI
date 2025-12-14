@@ -7,7 +7,7 @@ from heapq import heappush, heappop
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-# --- CẤU HÌNH ---
+
 MAP_FILE = "phuong_tuong_mai.graphml"
 
 print("Đang tải bản đồ...")
@@ -35,9 +35,9 @@ TRAFFIC_LEVELS = {
 }
 
 SPEEDS = {
-    "walk": 5 / 3.6,        # m/s
-    "motorbike": 25 / 3.6,  # m/s
-    "car": 35 / 3.6         # m/s
+    "walk": 5 / 3.6,        
+    "motorbike": 25 / 3.6,  
+    "car": 35 / 3.6         
 }
 NON_CAR_HIGHWAYS = {'footway', 'path', 'pedestrian', 'steps', 'cycleway', 'living_street', 'construction'}
 
@@ -539,4 +539,5 @@ def clear_forbidden():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
 
