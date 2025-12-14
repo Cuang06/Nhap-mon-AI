@@ -21,21 +21,19 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)
 
-# ==========================================
-# QUẢN LÝ TRẠNG THÁI
-# ==========================================
 
-USER_DATA = []          # (không còn dùng cho tắc đường theo điểm, nhưng giữ nếu sau này cần)
-FORBIDDEN_DATA = []     # Danh sách điểm (lat,lng) bị cấm
-GLOBAL_RAINFALL = 0     # Mưa (mm)
 
-# Hệ số tắc đường theo level
+USER_DATA = []          
+FORBIDDEN_DATA = []     
+GLOBAL_RAINFALL = 0     
+
+
 TRAFFIC_LEVELS = {
-    "light": 1.2,   # Đông
-    "medium": 1.5,  # Tắc vừa
-    "heavy": 2.0    # Tắc nặng
+    "light": 1.2,   
+    "medium": 1.5,  
+    "heavy": 2.0    
 }
-# --- [MỚI] CẤU HÌNH XE & LOGIC Ô TÔ ---
+
 SPEEDS = {
     "walk": 5 / 3.6,        # m/s
     "motorbike": 25 / 3.6,  # m/s
@@ -48,12 +46,12 @@ def is_car_allowed(edge_data):
     hw = edge_data.get('highway', '')
     if isinstance(hw, list): hw = hw[0]
     
-    # Chỉ trả về True nếu highway là 'primary'
+    
     return hw == 'primary'
 def calculate_path_time(G_graph, path, speed_ms):
     if not path: return 0, 0
     total_len = 0
-    total_weighted_len = 0 # Độ dài quy đổi ra thời gian (tính cả tắc)
+    total_weighted_len = 0 
     
     for i in range(len(path) - 1):
         u, v = path[i], path[i+1]
@@ -61,21 +59,21 @@ def calculate_path_time(G_graph, path, speed_ms):
             edge_data = min(G_graph.get_edge_data(u, v).values(), key=lambda x: x.get('length', 0))
             
             length = float(edge_data.get('length', 0))
-            factor = float(edge_data.get('traffic_factor', 1.0)) # Lấy hệ số tắc
+            factor = float(edge_data.get('traffic_factor', 1.0)) 
             
             total_len += length
-            total_weighted_len += length * factor # Quãng đường "ảo" dài hơn do tắc
+            total_weighted_len += length * factor 
 
-    # Thời gian = Quãng đường (đã nhân hệ số tắc) / Vận tốc
+  
     return total_len, (total_weighted_len / speed_ms) / 60
 
-# Tạo sẵn bản đồ riêng cho ô tô (lọc đường ngay khi khởi động server)
+
 print("-> Đang tạo lớp bản đồ cho ô tô...")
 G_car = G.copy()
 remove_edges = [(u, v, k) for u, v, k, d in G_car.edges(keys=True, data=True) if not is_car_allowed(d)]
 G_car.remove_edges_from(remove_edges)
 G_car.remove_nodes_from(list(nx.isolates(G_car)))
-# ---------------------------------------
+
 def haversine_calc(lat1, lon1, lat2, lon2):
     R = 6371000 
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -84,7 +82,7 @@ def haversine_calc(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-# --- CHECK ĐƯỜNG CẤM (theo node, giữ logic cũ) ---
+
 def is_node_forbidden(node_lat, node_lng):
     if not FORBIDDEN_DATA:
         return False
@@ -94,22 +92,19 @@ def is_node_forbidden(node_lat, node_lng):
             return True
     return False
 
-# --- CHECK NGẬP LỤT (giữ logic cũ) ---
-# --- CẢI TIẾN HÀM CHECK CHIỀU RỘNG ---
-# --- CẢI TIẾN HÀM CHECK CHIỀU RỘNG ---
 def get_road_width(edge_data):
-    # Lấy width từ dữ liệu map
+    
     width_raw = edge_data.get('width', None)
     final_width = None
 
     if width_raw:
-        # Xử lý trường hợp width là list hoặc string lạ
+        
         if isinstance(width_raw, list):
             width_raw = str(width_raw[0])
         else:
             width_raw = str(width_raw)
         
-        # Regex tìm số float đầu tiên (VD: "5.5m", "5;6", "approx 5")
+        
         try:
             nums = re.findall(r"[-+]?\d*\.\d+|\d+", width_raw)
             if nums:
@@ -117,7 +112,7 @@ def get_road_width(edge_data):
         except Exception:
             pass
 
-    # Nếu không parse được, dùng highway type
+    
     if final_width is None:
         highway_type = edge_data.get('highway', 'residential')
         if isinstance(highway_type, list):
@@ -131,36 +126,31 @@ def get_road_width(edge_data):
         }
         final_width = width_mapping.get(highway_type, 4.0)
 
-    # CHỐT CHẶN: Giới hạn width tối đa là 20m thôi (để dễ ngập hơn)
+    
     if final_width > 20:
         final_width = 20.0
         
     return final_width
 
-# --- CẢI TIẾN LOGIC TRẠNG THÁI NGẬP ---
+
 def get_flood_status(edge_data):
-    # 1. Mưa nhỏ hoặc không mưa -> Không ngập
+    
     if GLOBAL_RAINFALL <= 10: 
         return False, 0
     
-    # 2. Mưa rất to (> 1000mm) -> Ngập toàn bộ (Noah's Ark mode)
     if GLOBAL_RAINFALL > 1000:
         return True, float('inf')
     
     width = get_road_width(edge_data)
     
-    # Công thức: Sức chịu đựng = width * 15 (Giảm hệ số để đường dễ ngập hơn)
+    
     capacity = width * 15.0 
     
     if GLOBAL_RAINFALL > capacity:
         return True, float('inf')
     
     return False, 0
-# --- CẢI TIẾN LOGIC NGẬP ---
 
-# ==========================================
-# GEOMETRY & A*
-# ==========================================
 
 def parse_linestring(wkt_str):
     try:
@@ -220,7 +210,6 @@ def a_star(graph, start, goal):
             continue
 
         for neighbor in graph.neighbors(current):
-            # Lấy cạnh tốt nhất giữa 2 node
             edge_key, edge_data = min(
                 graph[current][neighbor].items(),
                 key=lambda kv: kv[1].get('length', float('inf'))
@@ -228,18 +217,16 @@ def a_star(graph, start, goal):
             length = float(edge_data.get('length', 1))
             traffic_factor = float(edge_data.get('traffic_factor', 1.0))
 
-            # 1. CHECK ĐƯỜNG CẤM (CHẶN TUYỆT ĐỐI)
             node_lat = graph.nodes[neighbor]['y']
             node_lng = graph.nodes[neighbor]['x']
             if is_node_forbidden(node_lat, node_lng):
                 continue 
             
-            # 2. CHECK NGẬP LỤT (CHẶN TUYỆT ĐỐI - NHƯ BẠN YÊU CẦU)
             is_flooded, _ = get_flood_status(edge_data)
             if is_flooded:
-                continue # <--- Dòng quan trọng: Gặp ngập là bỏ qua luôn, không xét nữa.
+                continue 
 
-            # Tính chi phí bình thường
+            
             new_cost = cost_so_far[current] + length * traffic_factor
             
             if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
@@ -249,7 +236,7 @@ def a_star(graph, start, goal):
                 came_from[neighbor] = current
 
     if goal not in came_from:
-        return None # Trả về None nếu không tìm được đường (do bị ngập hết lối đi)
+        return None
 
     path = []
     curr = goal
@@ -297,7 +284,7 @@ def mark_traffic_on_path(path_nodes, level):
         v = path_nodes[i + 1]
         if not G.has_edge(u, v):
             continue
-        # Lấy cạnh ngắn nhất
+        
         key, data = min(
             G[u][v].items(),
             key=lambda kv: kv[1].get('length', float('inf'))
@@ -306,56 +293,50 @@ def mark_traffic_on_path(path_nodes, level):
         # Đoạn nặng hơn sẽ ưu tiên (max)
         data['traffic_factor'] = max(current_factor, factor)
 
-# ==========================================
-# API
-# ==========================================
-
 @app.route('/api/find-path', methods=['POST'])
 def find_path_api():
     data = request.json
-    start = data.get('start') # {lat, lng}
-    end = data.get('end')     # {lat, lng}
-    vehicle = data.get('vehicle', 'motorbike') # mặc định là xe máy nếu ko chọn
+    start = data.get('start') 
+    end = data.get('end')     
+    vehicle = data.get('vehicle', 'motorbike') 
 
     if not start or not end:
         return jsonify({"status": "error", "message": "Thiếu điểm đầu/cuối"}), 400
 
     try:
-        # Tìm node gần nhất trên bản đồ gốc
+
         start_node = ox.distance.nearest_nodes(G, start['lng'], start['lat'])
         end_node = ox.distance.nearest_nodes(G, end['lng'], end['lat'])
         
-        full_path_coords = [] # Chỉ dùng cho trường hợp không phải ô tô
+        full_path_coords = [] 
         total_dist = 0
         total_time = 0
         details = []
 
         if vehicle == 'car':
-            # --- LOGIC ĐẶC BIỆT CHO Ô TÔ (Đi bộ -> Lái xe -> Đi bộ) ---
             try:
                 car_start = ox.distance.nearest_nodes(G_car, start['lng'], start['lat'])
                 car_end = ox.distance.nearest_nodes(G_car, end['lng'], end['lat'])
             except:
                 return jsonify({"status": "error", "message": "Không tìm thấy đường ô tô gần đó"}), 404
 
-            # 1. Đi bộ ra chỗ đậu xe
+            
             path1 = []
             if start_node != car_start:
                 try: path1 = nx.shortest_path(G, start_node, car_start, weight='length')
                 except: pass
             
-            # 2. Lái xe
+            
             path2 = []
             try: path2 = nx.shortest_path(G_car, car_start, car_end, weight='length')
             except nx.NetworkXNoPath: return jsonify({"status": "error", "message": "Ô tô không đi được giữa 2 điểm này"}), 404
 
-            # 3. Đi bộ vào đích
+            
             path3 = []
             if car_end != end_node:
                 try: path3 = nx.shortest_path(G, car_end, end_node, weight='length')
                 except: pass
 
-            # Tính toán
             d1, t1 = calculate_path_time(G, path1, SPEEDS['walk'])
             d2, t2 = calculate_path_time(G_car, path2, SPEEDS['car'])
             d3, t3 = calculate_path_time(G, path3, SPEEDS['walk'])
@@ -364,18 +345,18 @@ def find_path_api():
             total_time = t1 + t2 + t3
             details = [f"Đi bộ: {d1:.0f}m ({t1:.1f}p)", f"Ô tô: {d2:.0f}m ({t2:.1f}p)", f"Đi bộ: {d3:.0f}m ({t3:.1f}p)"]
             
-            # [CẬP NHẬT] CHIA PATH THÀNH 3 ĐOẠN ĐỘC LẬP (ĐỂ VẼ NÉT ĐỨT Ở FRONTEND)
+            
             path1_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path1]
             path2_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path2]
             path3_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in path3]
             
-            # Ghép path lại cho kết quả "path" chính (để đảm bảo tính liên tục cho trường hợp fallback)
+            
             full_path_coords = path1_coords + path2_coords[1:]
             if path3_coords: full_path_coords += path3_coords[1:]
 
             return jsonify({
                 "status": "success",
-                "path": full_path_coords, # Dùng cho trường hợp chung
+                "path": full_path_coords, 
                 "path1_walk": path1_coords,
                 "path2_drive": path2_coords,
                 "path3_walk": path3_coords,
@@ -385,16 +366,16 @@ def find_path_api():
             })
             
         else:
-            # --- LOGIC XE MÁY / ĐI BỘ ---
+            
             try:
-                full_path_nodes = a_star(G, start_node, end_node) # Dùng hàm a_star của bạn
+                full_path_nodes = a_star(G, start_node, end_node) 
                 if full_path_nodes is None:
                     return jsonify({"status": "error", "message": "Không tìm thấy đường đi (có thể do ngập hoặc cấm)"}), 404
                 total_dist, total_time = calculate_path_time(G, full_path_nodes, SPEEDS[vehicle])
             except nx.NetworkXNoPath:
                 return jsonify({"status": "error", "message": "Không tìm thấy đường đi"}), 404
 
-            # Chuyển đổi list node ID sang tọa độ [lat, lng] để vẽ
+            
             full_path_coords = [[G.nodes[n]['y'], G.nodes[n]['x']] for n in full_path_nodes]
 
         return jsonify({
@@ -417,10 +398,6 @@ def get_all_nodes():
 
 @app.route('/api/add-traffic', methods=['POST'])
 def add_traffic_segment():
-    """
-    Nhận 2 điểm (start, end) + level, tìm đoạn đường giữa 2 điểm đó và
-    gán hệ số tắc đường cho các cạnh trên đoạn này.
-    """
     data = request.json
     start = data.get('start')
     end = data.get('end')
@@ -442,22 +419,20 @@ def add_traffic_segment():
         if not path_nodes:
             return jsonify({"status": "error", "message": "Không tìm được đoạn đường giữa 2 điểm."}), 404
 
-        # Gán hệ số tắc đường lên graph gốc
         mark_traffic_on_path(path_nodes, level)
-        # Cập nhật lại trọng số cho G_car nếu cạnh đó tồn tại
+        
         for u, v in zip(path_nodes[:-1], path_nodes[1:]):
             if G_car.has_edge(u, v):
-                # Lấy data từ G chép sang G_car
-                # (Lưu ý: đây là giải pháp đơn giản hóa)
+                
                 for k in G[u][v]:
                     if k in G_car[u][v]:
                         G_car[u][v][k]['traffic_factor'] = G[u][v][k].get('traffic_factor', 1.0)
         path_coords = build_path_coords(G, path_nodes)
 
         color_map = {
-            "light": "#ffd000",   # vàng
-            "medium": "#ff7f00",  # cam
-            "heavy": "#ff0000"    # đỏ
+            "light": "#ffd000",   
+            "medium": "#ff7f00",  
+            "heavy": "#ff0000"    
         }
         color = color_map.get(level, "#ffd000")
         factor = TRAFFIC_LEVELS.get(level, 1.2)
@@ -476,9 +451,7 @@ def add_traffic_segment():
 
 @app.route('/api/clear-traffic', methods=['POST'])
 def clear_traffic():
-    """
-    Xóa toàn bộ thông tin tắc đường (traffic_factor) khỏi graph.
-    """
+    
     for u, v, k, data in G.edges(keys=True, data=True):
         if 'traffic_factor' in data:
             del data['traffic_factor']
@@ -493,19 +466,14 @@ def set_rain():
 @app.route('/api/safe-roads', methods=['GET'])
 @app.route('/api/safe-roads', methods=['GET'])
 def get_safe_roads():
-    """
-    Trả về:
-      - safe_roads: các đoạn KHÔNG ngập
-      - flooded_roads: các đoạn BỊ ngập
-    => Frontend vẽ 2 màu khác nhau, nhìn đầy đủ mạng lưới.
-    """
+    
     safe_segments = []
     flooded_segments = []
 
     for u, v, k, data in G.edges(keys=True, data=True):
         is_flooded, _ = get_flood_status(data)
 
-        # Lấy toạ độ đoạn đường
+        
         if 'geometry' in data:
             coords = parse_linestring(data['geometry'])
             if not coords:
@@ -527,10 +495,7 @@ def get_safe_roads():
     })
 @app.route('/api/add-forbidden', methods=['POST'])
 def add_forbidden():
-    """
-    Nhận 2 điểm (start, end), tìm đoạn đường giữa 2 điểm đó
-    rồi đánh dấu tất cả các node trên đoạn đó là CẤM (FORBIDDEN_DATA).
-    """
+    
     global FORBIDDEN_DATA
     data = request.json
     start = data.get('start')
@@ -574,3 +539,4 @@ def clear_forbidden():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
